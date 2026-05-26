@@ -1,0 +1,6 @@
+interface:
+  display_name: "ZenTao Bug Fixer"
+  short_description: "Fix assigned ZenTao bugs from a codebase"
+  default_prompt: "Use $zentao-bug-fixer to choose a ZenTao product and assignee, then fix that user's unresolved bugs in this project."
+policy:
+  allow_implicit_invocation: true
