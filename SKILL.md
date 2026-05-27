@@ -37,8 +37,8 @@ Never write credentials, tokens, private ZenTao domains, or product IDs into thi
 2. Check for uncommitted local changes before editing. Work with existing user changes; do not revert them.
 3. Use `scripts/zentao_bug_flow.py` or `scripts/zentao_client.py` to get product and bug context.
 4. If no product is known, list products and ask the user to choose one.
-5. List unresolved bugs for the selected product, group them by `assignedTo`, and ask the user which assignee's unresolved bugs to batch repair.
-6. Process every unresolved bug assigned to the selected user, one bug at a time.
+5. List unresolved bugs whose Bug type is a code issue, group them by `assignedTo`, and ask the user which assignee's repairable bugs to batch repair.
+6. Process every unresolved code-issue bug assigned to the selected user, one bug at a time.
 7. For each bug, fetch full bug details and summarize the title, reproduction steps, expected result, priority, severity, environment, and keywords.
 8. Search the business project with `rg` and repair the code using the repository's existing patterns.
 9. Run the most relevant verification command available in the business project.
@@ -53,10 +53,16 @@ List products:
 python3 /path/to/zentao-bug-fixer/scripts/zentao_client.py products
 ```
 
-List unresolved bugs for a product:
+List unresolved code-issue bugs for a product:
 
 ```bash
 python3 /path/to/zentao-bug-fixer/scripts/zentao_client.py bugs 8
+```
+
+Include non-code bug types only for inspection:
+
+```bash
+python3 /path/to/zentao-bug-fixer/scripts/zentao_client.py bugs 8 --include-non-code
 ```
 
 Read a bug:
@@ -102,7 +108,7 @@ Do not delete bugs, close bugs, resolve bugs, edit unrelated fields, or update b
 
 ## Batch Mode
 
-When the user chooses an assignee, process that assignee's unresolved bugs one at a time:
+When the user chooses an assignee, process that assignee's unresolved code-issue bugs one at a time:
 
 1. Fetch detail.
 2. Repair locally.

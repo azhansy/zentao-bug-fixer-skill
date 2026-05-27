@@ -9,7 +9,7 @@ import re
 import sys
 from typing import Any, Dict, List, Optional
 
-from zentao_client import ZenTaoClient, ZenTaoError, bug_sort_key, unresolved_bugs
+from zentao_client import ZenTaoClient, ZenTaoError, bug_sort_key, repairable_bugs
 
 
 def clean_text(value: Any, limit: Optional[int] = None) -> str:
@@ -112,6 +112,10 @@ def bugs_for_assignee(assignee: str, bugs: List[Dict[str, Any]]) -> List[Dict[st
     return selected
 
 
+def load_repairable_bugs(client: ZenTaoClient, product_id: int) -> List[Dict[str, Any]]:
+    return repairable_bugs(client.product_bugs(product_id))
+
+
 def bug_context(bug: Dict[str, Any]) -> str:
     fields = [
         ("Bug ID", bug.get("id")),
@@ -149,13 +153,13 @@ def run_interactive(args: argparse.Namespace) -> int:
     raw_product = args.product or prompt("请选择产品序号或产品 ID")
     product_id = _resolve_product_id(raw_product, products)
 
-    bugs = sorted(unresolved_bugs(client.product_bugs(product_id)), key=bug_sort_key)
+    bugs = sorted(load_repairable_bugs(client, product_id), key=bug_sort_key)
     if not bugs:
-        print("该产品没有未解决 Bug。")
+        print("该产品没有未解决且类型为代码问题的 Bug。")
         return 0
 
     print(format_assignee_summary(bugs))
-    raw_assignee = args.assigned_to or prompt("请选择指派人序号、账号或姓名，将批量修复该用户的所有未解决 Bug")
+    raw_assignee = args.assigned_to or prompt("请选择指派人序号、账号或姓名，将批量修复该用户所有未解决且类型为代码问题的 Bug")
     assignee = parse_assignee_selection(raw_assignee, bugs)
     selected = sorted(bugs_for_assignee(assignee, bugs), key=bug_sort_key)
     print(format_bug_summary(selected))

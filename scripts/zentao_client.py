@@ -12,13 +12,23 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
 DEFAULT_API_PREFIX = "/api.php/v1"
+CODE_BUG_TYPE_VALUES = {
+    "code",
+    "codeerror",
+    "code error",
+    "codeissue",
+    "code issue",
+    "代码问题",
+    "代码错误",
+}
+CODE_BUG_TYPE_FIELDS = ("type", "bugType", "typeName", "typeLabel", "Bug类型")
 
 
 class ZenTaoError(RuntimeError):
@@ -150,6 +160,46 @@ def unresolved_bugs(bugs: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [bug for bug in bugs if is_unresolved_bug(bug)]
 
 
+def is_code_bug(bug: Dict[str, Any]) -> bool:
+    for field in CODE_BUG_TYPE_FIELDS:
+        if _type_value_is_code_bug(bug.get(field)):
+            return True
+    return False
+
+
+def repairable_bugs(bugs: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [bug for bug in bugs if is_unresolved_bug(bug) and is_code_bug(bug)]
+
+
+def _type_value_is_code_bug(value: Any) -> bool:
+    for text in _type_text_values(value):
+        normalized = _normalize_type_text(text)
+        compact = normalized.replace(" ", "")
+        if normalized in CODE_BUG_TYPE_VALUES or compact in CODE_BUG_TYPE_VALUES:
+            return True
+    return False
+
+
+def _type_text_values(value: Any) -> Iterator[str]:
+    if value in (None, ""):
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _type_text_values(item)
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _type_text_values(item)
+        return
+    yield str(value)
+
+
+def _normalize_type_text(value: str) -> str:
+    text = value.strip().casefold()
+    text = text.replace("_", " ").replace("-", " ")
+    return " ".join(text.split())
+
+
 def bug_sort_key(bug: Dict[str, Any]) -> tuple:
     severity = _int_or_default(bug.get("severity"), 99)
     priority = _int_or_default(bug.get("pri"), 99)
@@ -205,6 +255,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     bugs_parser = subparsers.add_parser("bugs")
     bugs_parser.add_argument("product_id", type=int)
     bugs_parser.add_argument("--all", action="store_true", help="Include resolved and closed bugs.")
+    bugs_parser.add_argument("--include-non-code", action="store_true", help="Include non-code bug types.")
 
     bug_parser = subparsers.add_parser("bug")
     bug_parser.add_argument("bug_id", type=int)
@@ -221,8 +272,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             _print_json(client.products())
         elif args.command == "bugs":
             bugs = client.product_bugs(args.product_id)
-            if not args.all:
+            if args.all:
+                if not args.include_non_code:
+                    bugs = [bug for bug in bugs if is_code_bug(bug)]
+            elif args.include_non_code:
                 bugs = unresolved_bugs(bugs)
+            else:
+                bugs = repairable_bugs(bugs)
             _print_json(sorted(bugs, key=bug_sort_key))
         elif args.command == "bug":
             _print_json(client.bug(args.bug_id))

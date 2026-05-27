@@ -11,6 +11,7 @@ from zentao_bug_flow import (  # noqa: E402
     format_assignee_summary,
     format_bug_summary,
     format_product_summary,
+    load_repairable_bugs,
     parse_assignee_selection,
 )
 
@@ -70,6 +71,21 @@ class ZenTaoBugFlowTests(unittest.TestCase):
         ]
 
         self.assertEqual(bugs_for_assignee("alice", bugs), [bugs[0], bugs[2]])
+
+    def test_load_repairable_bugs_filters_to_unresolved_code_bugs(self):
+        class Client:
+            def product_bugs(self, product_id):
+                self.product_id = product_id
+                return [
+                    {"id": 10, "status": "active", "type": "产品逻辑"},
+                    {"id": 20, "status": "active", "type": "代码问题"},
+                    {"id": 30, "status": "resolved", "type": "codeerror", "resolvedBy": "dev"},
+                ]
+
+        client = Client()
+
+        self.assertEqual(load_repairable_bugs(client, 8), [{"id": 20, "status": "active", "type": "代码问题"}])
+        self.assertEqual(client.product_id, 8)
 
 
 if __name__ == "__main__":

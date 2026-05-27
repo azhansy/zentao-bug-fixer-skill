@@ -11,7 +11,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from zentao_client import (  # noqa: E402
     ZenTaoClient,
     build_bug_comment_payload,
+    is_code_bug,
     is_unresolved_bug,
+    repairable_bugs,
 )
 
 
@@ -50,6 +52,25 @@ class ZenTaoClientTests(unittest.TestCase):
         self.assertFalse(is_unresolved_bug({"status": "resolved", "resolvedBy": "dev", "closedBy": ""}))
         self.assertFalse(is_unresolved_bug({"status": "closed", "resolvedBy": "dev", "closedBy": "qa"}))
         self.assertFalse(is_unresolved_bug({"closedBy": "qa"}))
+
+    def test_is_code_bug_accepts_code_issue_type_values(self):
+        self.assertTrue(is_code_bug({"type": "codeerror"}))
+        self.assertTrue(is_code_bug({"type": "代码问题"}))
+        self.assertTrue(is_code_bug({"type": {"name": "代码错误"}}))
+
+    def test_is_code_bug_rejects_product_logic_and_empty_types(self):
+        self.assertFalse(is_code_bug({"type": "产品逻辑"}))
+        self.assertFalse(is_code_bug({"type": {"name": "需求问题"}}))
+        self.assertFalse(is_code_bug({"title": "缺少 type 字段"}))
+
+    def test_repairable_bugs_only_returns_unresolved_code_bugs(self):
+        bugs = [
+            {"id": 1, "status": "active", "type": "代码问题"},
+            {"id": 2, "status": "active", "type": "产品逻辑"},
+            {"id": 3, "status": "resolved", "type": "codeerror", "resolvedBy": "dev"},
+        ]
+
+        self.assertEqual(repairable_bugs(bugs), [bugs[0]])
 
     def test_build_bug_comment_payload_only_contains_comment(self):
         payload = build_bug_comment_payload(
