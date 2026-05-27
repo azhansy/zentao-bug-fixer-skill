@@ -51,6 +51,10 @@ class ZenTaoClient:
     token: Optional[str] = None
     api_prefix: str = DEFAULT_API_PREFIX
     timeout: int = 30
+    account: Optional[str] = None
+    password: Optional[str] = None
+    session_name: Optional[str] = None
+    session_id: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "ZenTaoClient":
@@ -61,6 +65,8 @@ class ZenTaoClient:
             base_url=base_url,
             token=os.getenv("ZENTAO_TOKEN"),
             api_prefix=os.getenv("ZENTAO_API_PREFIX", DEFAULT_API_PREFIX),
+            account=os.getenv("ZENTAO_ACCOUNT"),
+            password=os.getenv("ZENTAO_PASSWORD"),
         )
 
     def url(self, path: str, query: Optional[Dict[str, Any]] = None) -> str:
@@ -73,6 +79,9 @@ class ZenTaoClient:
         if clean_query:
             full = f"{full}?{urlencode(clean_query)}"
         return full
+
+    def web_url(self, path: str) -> str:
+        return _strip_join(self.base_url, path)
 
     def request(
         self,
@@ -99,6 +108,31 @@ class ZenTaoClient:
         except URLError as exc:
             raise ZenTaoError(f"ZenTao request failed: {exc.reason}") from exc
 
+    def request_form(
+        self,
+        method: str,
+        path: str,
+        payload: Optional[Dict[str, Any]] = None,
+        cookies: Optional[Dict[str, str]] = None,
+    ) -> Any:
+        body = None
+        headers = {"Accept": "application/json"}
+        if cookies:
+            headers["Cookie"] = "; ".join(f"{key}={value}" for key, value in cookies.items())
+        if payload is not None:
+            body = urlencode(payload).encode("utf-8")
+            headers["Content-Type"] = "application/x-www-form-urlencoded"
+
+        request = Request(self.web_url(path), data=body, headers=headers, method=method)
+        try:
+            with urlopen(request, timeout=self.timeout) as response:
+                return _json_loads(response.read())
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise ZenTaoError(f"ZenTao HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise ZenTaoError(f"ZenTao request failed: {exc.reason}") from exc
+
     def get(self, path: str, query: Optional[Dict[str, Any]] = None) -> Any:
         return self.request("GET", path, query=query)
 
@@ -114,7 +148,42 @@ class ZenTaoClient:
         if not token:
             raise ZenTaoError("Login succeeded but response did not contain token.")
         self.token = token
+        self.account = account
+        self.password = password
         return token
+
+    def ensure_web_session(self) -> None:
+        if self.session_name and self.session_id:
+            return
+        if not self.account or not self.password:
+            raise ZenTaoError("Set ZENTAO_ACCOUNT and ZENTAO_PASSWORD to add ZenTao comments.")
+
+        session_data = self.request_form("GET", "/api-getSessionID.json", None, None)
+        session = _response_data_object(session_data)
+        session_name = session.get("sessionName") if isinstance(session, dict) else None
+        session_id = session.get("sessionID") if isinstance(session, dict) else None
+        if not session_name or not session_id:
+            raise ZenTaoError("Could not obtain ZenTao web session.")
+
+        login_data = self.request_form(
+            "POST",
+            "/user-login.json",
+            {"account": self.account, "password": self.password},
+            {str(session_name): str(session_id)},
+        )
+        if not isinstance(login_data, dict) or login_data.get("status") != "success":
+            raise ZenTaoError(f"ZenTao web login failed: {login_data}")
+
+        self.session_name = str(session_name)
+        self.session_id = str(session_id)
+
+    def post_form(self, path: str, payload: Dict[str, Any]) -> Any:
+        return self.request_form("POST", path, payload, self._session_cookies())
+
+    def _session_cookies(self) -> Dict[str, str]:
+        if not self.session_name or not self.session_id:
+            raise ZenTaoError("ZenTao web session has not been initialized.")
+        return {self.session_name: self.session_id}
 
     def products(self) -> List[Dict[str, Any]]:
         data = self.get("/products")
@@ -141,7 +210,12 @@ class ZenTaoClient:
         raise ZenTaoError("Could not find bug detail in response.")
 
     def comment_bug(self, bug_id: int, cause: str, solution: str) -> Any:
-        return self.put(f"/bugs/{bug_id}", build_bug_comment_payload(cause=cause, solution=solution))
+        payload = build_bug_comment_payload(cause=cause, solution=solution)
+        self.ensure_web_session()
+        data = self.post_form(f"/action-comment-bug-{bug_id}.json", payload)
+        if isinstance(data, dict) and data.get("status") == "success":
+            return data
+        raise ZenTaoError(f"ZenTao comment failed: {data}")
 
 
 def is_unresolved_bug(bug: Dict[str, Any]) -> bool:
@@ -215,8 +289,22 @@ def _int_or_default(value: Any, default: int) -> int:
 
 
 def build_bug_comment_payload(cause: str, solution: str) -> Dict[str, Any]:
-    comment = f"问题原因：{cause.strip()}\n\n解决方案：{solution.strip()}"
+    clean_cause = cause.strip()
+    clean_solution = solution.strip()
+    comment = f"问题原因：{clean_cause}\n\n解决方案：{clean_solution}"
     return {"comment": comment}
+
+
+def _response_data_object(response: Any) -> Any:
+    if not isinstance(response, dict):
+        return {}
+    data = response.get("data")
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            return {}
+    return data if isinstance(data, dict) else {}
 
 
 def _print_json(value: Any) -> None:
@@ -228,14 +316,14 @@ def _build_client(args: argparse.Namespace) -> ZenTaoClient:
         base_url=args.base_url or os.getenv("ZENTAO_BASE_URL", ""),
         token=args.token or os.getenv("ZENTAO_TOKEN"),
         api_prefix=args.api_prefix or os.getenv("ZENTAO_API_PREFIX", DEFAULT_API_PREFIX),
+        account=args.account or os.getenv("ZENTAO_ACCOUNT"),
+        password=args.password or os.getenv("ZENTAO_PASSWORD"),
     )
     if not client.base_url:
         raise ZenTaoError("Set ZENTAO_BASE_URL or pass --base-url.")
 
-    account = args.account or os.getenv("ZENTAO_ACCOUNT")
-    password = args.password or os.getenv("ZENTAO_PASSWORD")
-    if not client.token and account and password:
-        client.login(account, password)
+    if not client.token and client.account and client.password:
+        client.login(client.account, client.password)
     if not client.token:
         raise ZenTaoError("Set ZENTAO_TOKEN, or provide ZENTAO_ACCOUNT and ZENTAO_PASSWORD.")
     return client

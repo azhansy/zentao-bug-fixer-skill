@@ -81,28 +81,28 @@ Add a cause and solution note after the local repair is complete:
 
 ```bash
 python3 /path/to/zentao-bug-fixer/scripts/zentao_client.py comment 6025 \
-  --cause "Root cause summary" \
-  --solution "Fix summary"
+  --cause "消息附件数组只读取了第一项。" \
+  --solution "遍历全部附件并逐条生成消息内容。"
 ```
 
-The helper targets ZenTao REST paths commonly exposed as:
+The helper targets ZenTao API paths commonly exposed as:
 
 - `POST /api.php/v1/tokens`
 - `GET /api.php/v1/products`
 - `GET /api.php/v1/products/:id/bugs`
 - `GET /api.php/v1/bugs/:id`
-- `PUT /api.php/v1/bugs/:id`
+- `POST /action-comment-bug-:id.json`
 
 If a self-hosted ZenTao instance customizes these paths, inspect its own `dev-api-restapi.html` and adjust `scripts/zentao_client.py` conservatively.
 
 ## ZenTao Note Update
 
-When a bug has been repaired and local verification has passed, add a ZenTao note without asking for another confirmation. Write a concise note containing:
+When a bug has been repaired and local verification has passed, add a ZenTao note without asking for another confirmation. Write a concise Chinese note containing:
 
-- `问题原因`: the specific root cause found in the code.
-- `解决方案`: the concrete change made.
+- `问题原因`: 用中文说明代码中的具体原因。
+- `解决方案`: 用中文说明已经做出的具体修改。
 
-Only send the `comment` field. Do not send `status`, `resolution`, `resolvedBuild`, `resolvedBy`, `closedBy`, or any other lifecycle field. QA or the user handles status transitions separately.
+Only send the `comment` field through the action comment endpoint. Do not send `status`, `resolution`, `resolvedBuild`, `resolvedBy`, `closedBy`, or any other lifecycle field. QA or the user handles status transitions separately.
 
 Do not delete bugs, close bugs, resolve bugs, edit unrelated fields, or update bugs that were not repaired in the current run.
 

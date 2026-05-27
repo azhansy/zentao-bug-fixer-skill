@@ -99,8 +99,8 @@ Add a cause and solution note to a repaired bug:
 
 ```bash
 python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py comment 6025 \
-  --cause "Root cause summary" \
-  --solution "Fix summary"
+  --cause "消息附件数组只读取了第一项。" \
+  --solution "遍历全部附件并逐条生成消息内容。"
 ```
 
 ## Test

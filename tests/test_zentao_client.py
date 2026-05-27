@@ -2,7 +2,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,14 +74,60 @@ class ZenTaoClientTests(unittest.TestCase):
 
     def test_build_bug_comment_payload_only_contains_comment(self):
         payload = build_bug_comment_payload(
-            cause="Null payload was not guarded.",
-            solution="Added a defensive check before rendering.",
+            cause="消息附件数组只读取了第一项。",
+            solution="遍历全部附件并逐条生成消息内容。",
         )
 
         self.assertEqual(set(payload.keys()), {"comment"})
         self.assertIn("问题原因", payload["comment"])
         self.assertIn("解决方案", payload["comment"])
-        self.assertIn("Null payload", payload["comment"])
+        self.assertIn("消息附件数组", payload["comment"])
+
+    def test_comment_bug_posts_to_action_comment_endpoint(self):
+        client = ZenTaoClient("https://example.com/zentao", token="abc")
+
+        with (
+            patch.object(client, "ensure_web_session") as session_mock,
+            patch.object(client, "post_form", return_value={"status": "success", "data": 123}) as post_mock,
+        ):
+            payload = client.comment_bug(
+                6025,
+                "消息附件数组只读取了第一项。",
+                "遍历全部附件并逐条生成消息内容。",
+            )
+
+        session_mock.assert_called_once()
+        post_mock.assert_called_once_with(
+            "/action-comment-bug-6025.json",
+            {"comment": "问题原因：消息附件数组只读取了第一项。\n\n解决方案：遍历全部附件并逐条生成消息内容。"},
+        )
+        self.assertEqual(payload, {"status": "success", "data": 123})
+
+    def test_ensure_web_session_logs_in_with_json_api_session_cookie(self):
+        client = ZenTaoClient("https://example.com/zentao", account="alice", password="secret")
+        responses = [
+            {
+                "status": "success",
+                "data": json.dumps({"sessionName": "zentaosid", "sessionID": "session-123"}),
+            },
+            {
+                "status": "success",
+                "user": {"token": "session-123"},
+            },
+        ]
+
+        with patch.object(client, "request_form", side_effect=responses) as form_mock:
+            client.ensure_web_session()
+
+        self.assertEqual(client.session_name, "zentaosid")
+        self.assertEqual(client.session_id, "session-123")
+        self.assertEqual(
+            [call.args for call in form_mock.call_args_list],
+            [
+                ("GET", "/api-getSessionID.json", None, None),
+                ("POST", "/user-login.json", {"account": "alice", "password": "secret"}, {"zentaosid": "session-123"}),
+            ],
+        )
 
 
 if __name__ == "__main__":
