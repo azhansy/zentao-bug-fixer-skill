@@ -32,6 +32,25 @@ class FakeResponse:
         return json.dumps(self.payload).encode("utf-8")
 
 
+class FakeRawResponse:
+    def __init__(self, body, status=200, url="https://example.com/zentao/action-comment-bug-6025.json"):
+        self.body = body
+        self.status = status
+        self.url = url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return self.body.encode("utf-8")
+
+    def geturl(self):
+        return self.url
+
+
 class ZenTaoClientTests(unittest.TestCase):
     def test_request_joins_base_url_and_api_prefix(self):
         client = ZenTaoClient("https://example.com/zentao/", token="abc", api_prefix="/api.php/v1/")
@@ -100,8 +119,21 @@ class ZenTaoClientTests(unittest.TestCase):
         post_mock.assert_called_once_with(
             "/action-comment-bug-6025.json",
             {"comment": "问题原因：消息附件数组只读取了第一项。\n\n解决方案：遍历全部附件并逐条生成消息内容。"},
+            allow_non_json_success=True,
         )
         self.assertEqual(payload, {"status": "success", "data": 123})
+
+    def test_comment_bug_treats_non_json_http_success_as_success(self):
+        client = ZenTaoClient("https://example.com/zentao", token="abc", account="alice", password="secret")
+        client.session_name = "zentaosid"
+        client.session_id = "session-123"
+
+        with patch("zentao_client.urlopen", return_value=FakeRawResponse("<html>saved</html>")):
+            payload = client.comment_bug(6025, "测试原因", "测试方案")
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["format"], "raw")
+        self.assertEqual(payload["statusCode"], 200)
 
     def test_ensure_web_session_logs_in_with_json_api_session_cookie(self):
         client = ZenTaoClient("https://example.com/zentao", account="alice", password="secret")

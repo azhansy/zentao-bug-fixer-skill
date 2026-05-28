@@ -114,6 +114,7 @@ class ZenTaoClient:
         path: str,
         payload: Optional[Dict[str, Any]] = None,
         cookies: Optional[Dict[str, str]] = None,
+        allow_non_json_success: bool = False,
     ) -> Any:
         body = None
         headers = {"Accept": "application/json"}
@@ -126,7 +127,18 @@ class ZenTaoClient:
         request = Request(self.web_url(path), data=body, headers=headers, method=method)
         try:
             with urlopen(request, timeout=self.timeout) as response:
-                return _json_loads(response.read())
+                response_body = response.read()
+                try:
+                    return _json_loads(response_body)
+                except json.JSONDecodeError:
+                    if not allow_non_json_success:
+                        raise
+                    return {
+                        "status": "success",
+                        "format": "raw",
+                        "statusCode": getattr(response, "status", None),
+                        "url": response.geturl() if hasattr(response, "geturl") else request.full_url,
+                    }
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise ZenTaoError(f"ZenTao HTTP {exc.code}: {detail}") from exc
@@ -177,8 +189,8 @@ class ZenTaoClient:
         self.session_name = str(session_name)
         self.session_id = str(session_id)
 
-    def post_form(self, path: str, payload: Dict[str, Any]) -> Any:
-        return self.request_form("POST", path, payload, self._session_cookies())
+    def post_form(self, path: str, payload: Dict[str, Any], allow_non_json_success: bool = False) -> Any:
+        return self.request_form("POST", path, payload, self._session_cookies(), allow_non_json_success)
 
     def _session_cookies(self) -> Dict[str, str]:
         if not self.session_name or not self.session_id:
@@ -212,7 +224,7 @@ class ZenTaoClient:
     def comment_bug(self, bug_id: int, cause: str, solution: str) -> Any:
         payload = build_bug_comment_payload(cause=cause, solution=solution)
         self.ensure_web_session()
-        data = self.post_form(f"/action-comment-bug-{bug_id}.json", payload)
+        data = self.post_form(f"/action-comment-bug-{bug_id}.json", payload, allow_non_json_success=True)
         if isinstance(data, dict) and data.get("status") == "success":
             return data
         raise ZenTaoError(f"ZenTao comment failed: {data}")
