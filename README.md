@@ -28,6 +28,7 @@ Optional settings:
 ```bash
 export ZENTAO_API_PREFIX="/api.php/v1"
 export ZENTAO_TOKEN="existing-token"
+export ZENTAO_RESOLVE_BUG_AFTER_COMMENT="1"
 ```
 
 Do not commit credentials, tokens, private domains, or project-specific product IDs.
@@ -102,6 +103,8 @@ python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py comment 6025 \
   --cause "消息附件数组只读取了第一项。" \
   --solution "遍历全部附件并逐条生成消息内容。"
 ```
+
+To mark the bug as resolved after the note succeeds, either set `ZENTAO_RESOLVE_BUG_AFTER_COMMENT=1` or pass `--resolve-bug-after-comment` to the comment command.
 
 ## Test
 

@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_API_PREFIX = "/api.php/v1"
+DEFAULT_RESOLVE_BUG_AFTER_COMMENT = False
 CODE_BUG_TYPE_VALUES = {
     "code",
     "codeerror",
@@ -55,6 +56,7 @@ class ZenTaoClient:
     password: Optional[str] = None
     session_name: Optional[str] = None
     session_id: Optional[str] = None
+    resolve_bug_after_comment: bool = DEFAULT_RESOLVE_BUG_AFTER_COMMENT
 
     @classmethod
     def from_env(cls) -> "ZenTaoClient":
@@ -65,6 +67,10 @@ class ZenTaoClient:
             base_url=base_url,
             token=os.getenv("ZENTAO_TOKEN"),
             api_prefix=os.getenv("ZENTAO_API_PREFIX", DEFAULT_API_PREFIX),
+            resolve_bug_after_comment=_env_bool(
+                "ZENTAO_RESOLVE_BUG_AFTER_COMMENT",
+                DEFAULT_RESOLVE_BUG_AFTER_COMMENT,
+            ),
             account=os.getenv("ZENTAO_ACCOUNT"),
             password=os.getenv("ZENTAO_PASSWORD"),
         )
@@ -154,6 +160,12 @@ class ZenTaoClient:
     def put(self, path: str, payload: Dict[str, Any]) -> Any:
         return self.request("PUT", path, payload=payload)
 
+    def resolve_bug(self, bug_id: int, resolution: str = "fixed") -> Any:
+        data = self.post(f"/bugs/{bug_id}/resolve", {"resolution": resolution})
+        if isinstance(data, dict) and data.get("status") == "success":
+            return data
+        raise ZenTaoError(f"ZenTao resolve failed: {data}")
+
     def login(self, account: str, password: str) -> str:
         data = self.post("/tokens", {"account": account, "password": password})
         token = data.get("token") if isinstance(data, dict) else None
@@ -226,6 +238,9 @@ class ZenTaoClient:
         self.ensure_web_session()
         data = self.post_form(f"/action-comment-bug-{bug_id}.json", payload, allow_non_json_success=True)
         if isinstance(data, dict) and data.get("status") == "success":
+            if self.resolve_bug_after_comment:
+                resolve_data = self.resolve_bug(bug_id)
+                return {"comment": data, "resolve": resolve_data}
             return data
         raise ZenTaoError(f"ZenTao comment failed: {data}")
 
@@ -307,6 +322,18 @@ def build_bug_comment_payload(cause: str, solution: str) -> Dict[str, Any]:
     return {"comment": comment}
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    normalized = raw.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ZenTaoError(f"Invalid boolean value for {name}: {raw}")
+
+
 def _response_data_object(response: Any) -> Any:
     if not isinstance(response, dict):
         return {}
@@ -324,10 +351,20 @@ def _print_json(value: Any) -> None:
 
 
 def _build_client(args: argparse.Namespace) -> ZenTaoClient:
+    env_resolve_flag = _env_bool(
+        "ZENTAO_RESOLVE_BUG_AFTER_COMMENT",
+        DEFAULT_RESOLVE_BUG_AFTER_COMMENT,
+    )
+    resolve_bug_after_comment = (
+        env_resolve_flag
+        if getattr(args, "resolve_bug_after_comment", None) is None
+        else bool(args.resolve_bug_after_comment)
+    )
     client = ZenTaoClient(
         base_url=args.base_url or os.getenv("ZENTAO_BASE_URL", ""),
         token=args.token or os.getenv("ZENTAO_TOKEN"),
         api_prefix=args.api_prefix or os.getenv("ZENTAO_API_PREFIX", DEFAULT_API_PREFIX),
+        resolve_bug_after_comment=resolve_bug_after_comment,
         account=args.account or os.getenv("ZENTAO_ACCOUNT"),
         password=args.password or os.getenv("ZENTAO_PASSWORD"),
     )
@@ -348,6 +385,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--token")
     parser.add_argument("--account")
     parser.add_argument("--password")
+    parser.add_argument(
+        "--resolve-bug-after-comment",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Resolve the bug after a successful comment; defaults to ZENTAO_RESOLVE_BUG_AFTER_COMMENT.",
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("products")

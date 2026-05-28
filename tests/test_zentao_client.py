@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from zentao_client import (  # noqa: E402
+    _build_client,
     ZenTaoClient,
     build_bug_comment_payload,
     is_code_bug,
@@ -134,6 +136,71 @@ class ZenTaoClientTests(unittest.TestCase):
         self.assertEqual(payload["status"], "success")
         self.assertEqual(payload["format"], "raw")
         self.assertEqual(payload["statusCode"], 200)
+
+    def test_comment_bug_can_resolve_after_comment_when_enabled(self):
+        client = ZenTaoClient(
+            "https://example.com/zentao",
+            token="abc",
+            account="alice",
+            password="secret",
+            resolve_bug_after_comment=True,
+        )
+        client.session_name = "zentaosid"
+        client.session_id = "session-123"
+
+        with (
+            patch.object(client, "ensure_web_session") as session_mock,
+            patch.object(client, "post_form", return_value={"status": "success", "format": "raw"}) as comment_mock,
+            patch.object(client, "post", return_value={"status": "success", "id": 6025, "statusText": "resolved"}) as resolve_mock,
+        ):
+            payload = client.comment_bug(6025, "测试原因", "测试方案")
+
+        session_mock.assert_called_once()
+        comment_mock.assert_called_once_with(
+            "/action-comment-bug-6025.json",
+            {"comment": "问题原因：测试原因\n\n解决方案：测试方案"},
+            allow_non_json_success=True,
+        )
+        resolve_mock.assert_called_once_with("/bugs/6025/resolve", {"resolution": "fixed"})
+        self.assertEqual(
+            payload,
+            {
+                "comment": {"status": "success", "format": "raw"},
+                "resolve": {"status": "success", "id": 6025, "statusText": "resolved"},
+            },
+        )
+
+    def test_from_env_reads_resolve_bug_after_comment_flag(self):
+        with patch.dict(
+            os.environ,
+            {
+                "ZENTAO_BASE_URL": "https://example.com/zentao",
+                "ZENTAO_RESOLVE_BUG_AFTER_COMMENT": "1",
+            },
+            clear=True,
+        ):
+            client = ZenTaoClient.from_env()
+
+        self.assertTrue(client.resolve_bug_after_comment)
+
+    def test_build_client_prefers_cli_resolve_flag_over_env(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "base_url": "https://example.com/zentao",
+                "api_prefix": None,
+                "token": "abc",
+                "account": None,
+                "password": None,
+                "resolve_bug_after_comment": False,
+            },
+        )()
+
+        with patch.dict(os.environ, {"ZENTAO_RESOLVE_BUG_AFTER_COMMENT": "1"}, clear=True):
+            client = _build_client(args)
+
+        self.assertFalse(client.resolve_bug_after_comment)
 
     def test_ensure_web_session_logs_in_with_json_api_session_cookie(self):
         client = ZenTaoClient("https://example.com/zentao", account="alice", password="secret")
