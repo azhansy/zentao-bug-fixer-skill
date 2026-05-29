@@ -31,6 +31,7 @@ export ZENTAO_ACCOUNT="your-account"
 export ZENTAO_PASSWORD="your-password"
 export ZENTAO_API_PREFIX="/api.php/v1"
 export ZENTAO_TOKEN="existing-token"
+export ZENTAO_RESOLVED_BUILD="主干"
 export ZENTAO_RESOLVE_BUG_AFTER_COMMENT="1"
 ```
 
@@ -109,7 +110,15 @@ python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py comment 6025 \
   --solution "遍历全部附件并逐条生成消息内容。"
 ```
 
-To mark the bug as resolved after the note succeeds, either set `ZENTAO_RESOLVE_BUG_AFTER_COMMENT=1` or pass `--resolve-bug-after-comment` to the comment command.
+Resolve a bug without adding a note:
+
+```bash
+python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py resolve 6025
+```
+
+To mark the bug as resolved after the note succeeds, either set `ZENTAO_RESOLVE_BUG_AFTER_COMMENT=1` or pass `--resolve-bug-after-comment` to the comment command. The resolved build defaults to `主干`; override it with `--resolved-build "build-id-or-name"` or `ZENTAO_RESOLVED_BUILD` when needed.
+
+If you only want to add the cause and solution note, pass `--no-resolve-bug-after-comment` when your environment has `ZENTAO_RESOLVE_BUG_AFTER_COMMENT=1`.
 
 ## Test
 

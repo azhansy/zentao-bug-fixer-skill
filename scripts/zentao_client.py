@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 
 DEFAULT_API_PREFIX = "/api.php/v1"
 DEFAULT_RESOLVE_BUG_AFTER_COMMENT = False
+DEFAULT_RESOLVED_BUILD = "主干"
 CODE_BUG_TYPE_VALUES = {
     "code",
     "codeerror",
@@ -59,6 +60,7 @@ class ZenTaoClient:
     session_name: Optional[str] = None
     session_id: Optional[str] = None
     resolve_bug_after_comment: bool = DEFAULT_RESOLVE_BUG_AFTER_COMMENT
+    resolved_build: Optional[str] = DEFAULT_RESOLVED_BUILD
 
     @classmethod
     def from_env(cls) -> "ZenTaoClient":
@@ -76,6 +78,7 @@ class ZenTaoClient:
             ),
             account=os.getenv("ZENTAO_ACCOUNT"),
             password=os.getenv("ZENTAO_PASSWORD"),
+            resolved_build=_clean_optional_string(os.getenv("ZENTAO_RESOLVED_BUILD")) or DEFAULT_RESOLVED_BUILD,
         )
 
     def url(self, path: str, query: Optional[Dict[str, Any]] = None) -> str:
@@ -163,8 +166,12 @@ class ZenTaoClient:
     def put(self, path: str, payload: Dict[str, Any]) -> Any:
         return self.request("PUT", path, payload=payload)
 
-    def resolve_bug(self, bug_id: int, resolution: str = "fixed") -> Any:
-        data = self.post(f"/bugs/{bug_id}/resolve", {"resolution": resolution})
+    def resolve_bug(self, bug_id: int, resolution: str = "fixed", resolved_build: Optional[str] = None) -> Any:
+        payload = {"resolution": resolution}
+        build = _clean_optional_string(resolved_build) or _clean_optional_string(self.resolved_build)
+        if build:
+            payload["resolvedBuild"] = build
+        data = self.post(f"/bugs/{bug_id}/resolve", payload)
         if isinstance(data, dict) and data.get("status") == "success":
             return data
         raise ZenTaoError(f"ZenTao resolve failed: {data}")
@@ -376,6 +383,13 @@ def _env_bool(name: str, default: bool = False) -> bool:
     raise ZenTaoError(f"Invalid boolean value for {name}: {raw}")
 
 
+def _clean_optional_string(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    clean = value.strip()
+    return clean or None
+
+
 def _response_data_object(response: Any) -> Any:
     if not isinstance(response, dict):
         return {}
@@ -410,6 +424,10 @@ def _build_client(args: argparse.Namespace) -> ZenTaoClient:
         resolve_bug_after_comment=resolve_bug_after_comment,
         account=args.account or os.getenv("ZENTAO_ACCOUNT"),
         password=args.password or os.getenv("ZENTAO_PASSWORD"),
+        resolved_build=_clean_optional_string(
+            getattr(args, "resolved_build", None) or os.getenv("ZENTAO_RESOLVED_BUILD")
+        )
+        or DEFAULT_RESOLVED_BUILD,
     )
     if not client.base_url:
         raise ZenTaoError("Set ZENTAO_BASE_URL or pass --base-url.")
@@ -446,10 +464,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     bug_parser = subparsers.add_parser("bug")
     bug_parser.add_argument("bug_id", type=int)
 
+    resolve_parser = subparsers.add_parser("resolve")
+    resolve_parser.add_argument("bug_id", type=int)
+    resolve_parser.add_argument(
+        "--resolution",
+        default="fixed",
+        help="ZenTao resolve value; defaults to fixed.",
+    )
+    resolve_parser.add_argument(
+        "--resolved-build",
+        help=f"ZenTao resolvedBuild value used for this resolve; defaults to {DEFAULT_RESOLVED_BUILD}.",
+    )
+
     comment_parser = subparsers.add_parser("comment")
     comment_parser.add_argument("bug_id", type=int)
     comment_parser.add_argument("--cause", required=True)
     comment_parser.add_argument("--solution", required=True)
+    comment_parser.add_argument(
+        "--resolved-build",
+        help=f"ZenTao resolvedBuild value used when resolve-after-comment is enabled; defaults to {DEFAULT_RESOLVED_BUILD}.",
+    )
 
     args = parser.parse_args(argv)
     try:
@@ -468,6 +502,14 @@ def main(argv: Optional[List[str]] = None) -> int:
             _print_json(sorted(bugs, key=bug_sort_key))
         elif args.command == "bug":
             _print_json(client.bug(args.bug_id))
+        elif args.command == "resolve":
+            _print_json(
+                client.resolve_bug(
+                    args.bug_id,
+                    resolution=args.resolution,
+                    resolved_build=getattr(args, "resolved_build", None),
+                )
+            )
         elif args.command == "comment":
             _print_json(client.comment_bug(args.bug_id, args.cause, args.solution))
         return 0
