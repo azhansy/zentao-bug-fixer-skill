@@ -32,6 +32,8 @@ Never write credentials, tokens, private ZenTao domains, or product IDs into thi
 }
 ```
 
+If the current shell does not already export the ZenTao variables, the helper scripts auto-load them from `.env` in the skill install directory.
+
 ## Workflow
 
 1. Confirm the current working directory is the business codebase the user wants modified.

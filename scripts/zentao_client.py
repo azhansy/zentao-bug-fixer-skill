@@ -10,8 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -60,6 +62,7 @@ class ZenTaoClient:
 
     @classmethod
     def from_env(cls) -> "ZenTaoClient":
+        _load_zentao_env()
         base_url = os.getenv("ZENTAO_BASE_URL")
         if not base_url:
             raise ZenTaoError("Missing ZENTAO_BASE_URL.")
@@ -322,6 +325,45 @@ def build_bug_comment_payload(cause: str, solution: str) -> Dict[str, Any]:
     return {"comment": comment}
 
 
+def _load_zentao_env() -> None:
+    for key, value in _read_env_file(_zentao_env_file_path()).items():
+        os.environ.setdefault(key, value)
+
+
+def _zentao_env_file_path() -> Path:
+    return Path(__file__).resolve().parents[1] / ".env"
+
+
+def _read_env_file(path: Path) -> Dict[str, str]:
+    if not path.is_file():
+        return {}
+
+    env: Dict[str, str] = {}
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, _, raw_value = line.partition("=")
+        key = key.strip()
+        if not key:
+            continue
+        raw_value = raw_value.strip()
+        if raw_value == "":
+            env[key] = ""
+            continue
+        try:
+            parsed = shlex.split(raw_value, posix=True)
+        except ValueError:
+            continue
+        value = " ".join(parsed) if parsed else ""
+        env[key] = value
+    return env
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None or raw.strip() == "":
@@ -351,6 +393,7 @@ def _print_json(value: Any) -> None:
 
 
 def _build_client(args: argparse.Namespace) -> ZenTaoClient:
+    _load_zentao_env()
     env_resolve_flag = _env_bool(
         "ZENTAO_RESOLVE_BUG_AFTER_COMMENT",
         DEFAULT_RESOLVE_BUG_AFTER_COMMENT,

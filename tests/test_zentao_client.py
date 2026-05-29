@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import unittest
+import tempfile
 from pathlib import Path
 from unittest.mock import call, patch
 
@@ -181,6 +182,34 @@ class ZenTaoClientTests(unittest.TestCase):
         ):
             client = ZenTaoClient.from_env()
 
+        self.assertTrue(client.resolve_bug_after_comment)
+
+    def test_from_env_loads_values_from_default_env_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_file = Path(tmpdir) / ".env"
+            env_file.write_text(
+                "\n".join(
+                    [
+                        'export ZENTAO_BASE_URL="https://example.com/zentao"',
+                        "ZENTAO_ACCOUNT=alice",
+                        "ZENTAO_PASSWORD=secret",
+                        "ZENTAO_TOKEN=token-123",
+                        "ZENTAO_RESOLVE_BUG_AFTER_COMMENT=1",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("zentao_client._zentao_env_file_path", return_value=env_file),
+            ):
+                client = ZenTaoClient.from_env()
+
+        self.assertEqual(client.base_url, "https://example.com/zentao")
+        self.assertEqual(client.account, "alice")
+        self.assertEqual(client.password, "secret")
+        self.assertEqual(client.token, "token-123")
         self.assertTrue(client.resolve_bug_after_comment)
 
     def test_build_client_prefers_cli_resolve_flag_over_env(self):

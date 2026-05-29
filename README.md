@@ -15,23 +15,28 @@ Restart Codex or open a new Codex session so the skill can be discovered.
 
 ## Configure
 
-Set ZenTao connection information in your shell environment:
+Copy `.env.example` to `.env` in the skill install directory, then fill in your ZenTao connection information:
+
+```bash
+cp .env.example .env
+```
+
+You can also export the same values in your shell if you prefer.
+
+Example values:
 
 ```bash
 export ZENTAO_BASE_URL="https://your-zentao.example.com/zentao"
 export ZENTAO_ACCOUNT="your-account"
 export ZENTAO_PASSWORD="your-password"
-```
-
-Optional settings:
-
-```bash
 export ZENTAO_API_PREFIX="/api.php/v1"
 export ZENTAO_TOKEN="existing-token"
 export ZENTAO_RESOLVE_BUG_AFTER_COMMENT="1"
 ```
 
 Do not commit credentials, tokens, private domains, or project-specific product IDs.
+
+If those values are not already exported in the current shell, the helper scripts auto-load them from `.env` in the skill install directory. `.env` is ignored by git; keep the example file checked in and the real file local.
 
 ## Use In A Business Project
 
