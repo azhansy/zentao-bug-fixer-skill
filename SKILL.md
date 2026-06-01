@@ -75,6 +75,14 @@ Read a bug:
 python3 /path/to/zentao-bug-fixer/scripts/zentao_client.py bug 6025
 ```
 
+Update a bug type:
+
+```bash
+python3 /path/to/zentao-bug-fixer/scripts/zentao_client.py bug-update 6025 --type others
+```
+
+Supported type values are `codeerror`, `config`, `install`, `security`, `performance`, `standard`, `automation`, `designdefect`, and `others`. Common Chinese labels such as `代码问题` are normalized to the matching ZenTao value.
+
 Run the interactive selector:
 
 ```bash
@@ -101,6 +109,8 @@ The helper targets ZenTao API paths commonly exposed as:
 - `GET /api.php/v1/products`
 - `GET /api.php/v1/products/:id/bugs`
 - `GET /api.php/v1/bugs/:id`
+- `PUT /api.php/v1/bugs/:id`
+- `POST /api.php/v1/bugs/:id/resolve`
 - `POST /action-comment-bug-:id.json`
 
 If a self-hosted ZenTao instance customizes these paths, inspect its own `dev-api-restapi.html` and adjust `scripts/zentao_client.py` conservatively.

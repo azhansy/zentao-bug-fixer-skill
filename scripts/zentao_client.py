@@ -23,6 +23,28 @@ from urllib.request import Request, urlopen
 DEFAULT_API_PREFIX = "/api.php/v1"
 DEFAULT_RESOLVE_BUG_AFTER_COMMENT = False
 DEFAULT_RESOLVED_BUILD = "主干"
+BUG_TYPE_VALUES = {
+    "codeerror",
+    "config",
+    "install",
+    "security",
+    "performance",
+    "standard",
+    "automation",
+    "designdefect",
+    "others",
+}
+BUG_TYPE_ALIASES = {
+    "代码问题": "codeerror",
+    "代码错误": "codeerror",
+    "code": "codeerror",
+    "code error": "codeerror",
+    "codeissue": "codeerror",
+    "code issue": "codeerror",
+    "设计缺陷": "designdefect",
+    "设计问题": "designdefect",
+    "其他": "others",
+}
 CODE_BUG_TYPE_VALUES = {
     "code",
     "codeerror",
@@ -243,6 +265,18 @@ class ZenTaoClient:
             return data
         raise ZenTaoError("Could not find bug detail in response.")
 
+    def update_bug(self, bug_id: int, bug_type: Optional[str] = None) -> Any:
+        payload: Dict[str, Any] = {}
+        if bug_type is not None:
+            payload["type"] = validate_bug_type(bug_type)
+        if not payload:
+            raise ZenTaoError("No bug fields were provided for update.")
+
+        data = self.put(f"/bugs/{bug_id}", payload)
+        if isinstance(data, dict) and data.get("status") == "success":
+            return data
+        raise ZenTaoError(f"ZenTao bug update failed: {data}")
+
     def comment_bug(self, bug_id: int, cause: str, solution: str) -> Any:
         payload = build_bug_comment_payload(cause=cause, solution=solution)
         self.ensure_web_session()
@@ -330,6 +364,23 @@ def build_bug_comment_payload(cause: str, solution: str) -> Dict[str, Any]:
     clean_solution = solution.strip()
     comment = f"问题原因：{clean_cause}\n\n解决方案：{clean_solution}"
     return {"comment": comment}
+
+
+def validate_bug_type(value: str) -> str:
+    normalized = _normalize_type_text(value)
+    compact = normalized.replace(" ", "")
+    if normalized in BUG_TYPE_VALUES:
+        return normalized
+    if compact in BUG_TYPE_VALUES:
+        return compact
+    if value.strip() in BUG_TYPE_ALIASES:
+        return BUG_TYPE_ALIASES[value.strip()]
+    if normalized in BUG_TYPE_ALIASES:
+        return BUG_TYPE_ALIASES[normalized]
+    if compact in BUG_TYPE_ALIASES:
+        return BUG_TYPE_ALIASES[compact]
+    allowed = ", ".join(sorted(BUG_TYPE_VALUES))
+    raise ValueError(f"Unsupported ZenTao bug type: {value}. Allowed values: {allowed}")
 
 
 def _load_zentao_env() -> None:
@@ -464,6 +515,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     bug_parser = subparsers.add_parser("bug")
     bug_parser.add_argument("bug_id", type=int)
 
+    bug_update_parser = subparsers.add_parser("bug-update")
+    bug_update_parser.add_argument("bug_id", type=int)
+    bug_update_parser.add_argument("--type", dest="bug_type", required=True, help="ZenTao bug type value.")
+
     resolve_parser = subparsers.add_parser("resolve")
     resolve_parser.add_argument("bug_id", type=int)
     resolve_parser.add_argument(
@@ -502,6 +557,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             _print_json(sorted(bugs, key=bug_sort_key))
         elif args.command == "bug":
             _print_json(client.bug(args.bug_id))
+        elif args.command == "bug-update":
+            _print_json(client.update_bug(args.bug_id, bug_type=args.bug_type))
         elif args.command == "resolve":
             _print_json(
                 client.resolve_bug(
@@ -513,7 +570,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         elif args.command == "comment":
             _print_json(client.comment_bug(args.bug_id, args.cause, args.solution))
         return 0
-    except ZenTaoError as exc:
+    except (ZenTaoError, ValueError) as exc:
         print(f"zentao_client: {exc}", file=sys.stderr)
         return 2
 

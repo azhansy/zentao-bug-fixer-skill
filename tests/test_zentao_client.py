@@ -18,6 +18,7 @@ from zentao_client import (  # noqa: E402
     is_code_bug,
     is_unresolved_bug,
     repairable_bugs,
+    validate_bug_type,
 )
 import zentao_client as zentao_client_module  # noqa: E402
 
@@ -219,6 +220,45 @@ class ZenTaoClientTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         resolve_mock.assert_called_once_with(6025, resolution="fixed", resolved_build=None)
+
+    def test_update_bug_type_puts_type_field(self):
+        client = ZenTaoClient("https://example.com/zentao", token="abc")
+
+        with patch.object(client, "put", return_value={"status": "success", "id": 6025}) as put_mock:
+            payload = client.update_bug(6025, bug_type="others")
+
+        put_mock.assert_called_once_with("/bugs/6025", {"type": "others"})
+        self.assertEqual(payload, {"status": "success", "id": 6025})
+
+    def test_validate_bug_type_accepts_chinese_code_issue_label(self):
+        self.assertEqual(validate_bug_type("代码问题"), "codeerror")
+
+    def test_validate_bug_type_rejects_unknown_values(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported ZenTao bug type"):
+            validate_bug_type("需求问题")
+
+    def test_main_bug_update_subcommand_calls_update_bug(self):
+        with patch.object(zentao_client_module, "_build_client") as build_client_mock:
+            client = ZenTaoClient("https://example.com/zentao", token="abc")
+            build_client_mock.return_value = client
+
+            with patch.object(client, "update_bug", return_value={"status": "success", "id": 6025}) as update_mock:
+                with patch("sys.stdout", new=io.StringIO()):
+                    exit_code = zentao_client_module.main(
+                        [
+                            "--base-url",
+                            "https://example.com/zentao",
+                            "--token",
+                            "abc",
+                            "bug-update",
+                            "6025",
+                            "--type",
+                            "others",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        update_mock.assert_called_once_with(6025, bug_type="others")
 
     def test_from_env_reads_resolve_bug_after_comment_flag(self):
         with patch.dict(

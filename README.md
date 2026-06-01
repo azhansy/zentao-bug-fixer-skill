@@ -96,6 +96,14 @@ Read bug `6025`:
 python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py bug 6025
 ```
 
+Update bug `6025` type:
+
+```bash
+python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py bug-update 6025 --type others
+```
+
+Supported type values are `codeerror`, `config`, `install`, `security`, `performance`, `standard`, `automation`, `designdefect`, and `others`. Common Chinese labels such as `代码问题` are normalized to the matching ZenTao value.
+
 Run the interactive selector:
 
 ```bash
