@@ -15,8 +15,10 @@ from zentao_client import (  # noqa: E402
     _build_client,
     ZenTaoClient,
     build_bug_comment_payload,
+    build_test_case_payload,
     is_code_bug,
     is_unresolved_bug,
+    load_test_case_batch,
     repairable_bugs,
     validate_bug_type,
 )
@@ -104,9 +106,11 @@ class ZenTaoClientTests(unittest.TestCase):
         )
 
         self.assertEqual(set(payload.keys()), {"comment"})
-        self.assertIn("问题原因", payload["comment"])
-        self.assertIn("解决方案", payload["comment"])
+        self.assertIn("问题原因：\n消息附件数组只读取了第一项。", payload["comment"])
+        self.assertIn("解决方案：\n遍历全部附件并逐条生成消息内容。", payload["comment"])
+        self.assertIn("\n\n---------\n通过 &lt;zentao-bug-fixer&gt; Skill 自动完成问题分析与修复。", payload["comment"])
         self.assertIn("消息附件数组", payload["comment"])
+        self.assertTrue(payload["comment"].endswith("通过 &lt;zentao-bug-fixer&gt; Skill 自动完成问题分析与修复。"))
 
     def test_comment_bug_posts_to_action_comment_endpoint(self):
         client = ZenTaoClient("https://example.com/zentao", token="abc")
@@ -124,7 +128,7 @@ class ZenTaoClientTests(unittest.TestCase):
         session_mock.assert_called_once()
         post_mock.assert_called_once_with(
             "/action-comment-bug-6025.json",
-            {"comment": "问题原因：消息附件数组只读取了第一项。\n\n解决方案：遍历全部附件并逐条生成消息内容。"},
+            {"comment": "问题原因：\n消息附件数组只读取了第一项。\n\n解决方案：\n遍历全部附件并逐条生成消息内容。\n\n---------\n通过 &lt;zentao-bug-fixer&gt; Skill 自动完成问题分析与修复。"},
             allow_non_json_success=True,
         )
         self.assertEqual(payload, {"status": "success", "data": 123})
@@ -185,7 +189,7 @@ class ZenTaoClientTests(unittest.TestCase):
         session_mock.assert_called_once()
         comment_mock.assert_called_once_with(
             "/action-comment-bug-6025.json",
-            {"comment": "问题原因：测试原因\n\n解决方案：测试方案"},
+            {"comment": "问题原因：\n测试原因\n\n解决方案：\n测试方案\n\n---------\n通过 &lt;zentao-bug-fixer&gt; Skill 自动完成问题分析与修复。"},
             allow_non_json_success=True,
         )
         resolve_mock.assert_called_once_with(
@@ -259,6 +263,171 @@ class ZenTaoClientTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         update_mock.assert_called_once_with(6025, bug_type="others")
+
+    def test_load_test_case_batch_applies_defaults_and_splits_step_objects(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases_file = Path(tmpdir) / "cases.json"
+            cases_file.write_text(
+                json.dumps(
+                    {
+                        "defaults": {"productID": 8, "module": 12, "type": "feature", "pri": 3},
+                        "cases": [
+                            {
+                                "title": "登录成功后进入首页",
+                                "precondition": "账号已注册",
+                                "steps": [
+                                    {"step": "输入正确账号密码", "expect": "登录按钮可点击"},
+                                    {"step": "点击登录", "expect": "进入首页"},
+                                ],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            cases = load_test_case_batch(cases_file)
+
+        self.assertEqual(
+            cases,
+            [
+                {
+                    "productID": 8,
+                    "module": 12,
+                    "type": "feature",
+                    "pri": 3,
+                    "title": "登录成功后进入首页",
+                    "precondition": "账号已注册",
+                    "steps": ["输入正确账号密码", "点击登录"],
+                    "expects": ["登录按钮可点击", "进入首页"],
+                    "stepType": ["step", "step"],
+                }
+            ],
+        )
+
+    def test_build_test_case_payload_accepts_product_alias_and_step_arrays(self):
+        payload = build_test_case_payload(
+            {
+                "product": 8,
+                "title": "搜索联系人",
+                "steps": ["打开通讯录", "输入关键词"],
+                "expects": ["显示通讯录", "过滤出匹配联系人"],
+            }
+        )
+
+        self.assertEqual(
+            payload,
+            {
+                "productID": 8,
+                "title": "搜索联系人",
+                "steps": ["打开通讯录", "输入关键词"],
+                "expects": ["显示通讯录", "过滤出匹配联系人"],
+                "stepType": ["step", "step"],
+            },
+        )
+
+    def test_create_test_case_posts_to_v2_testcases_endpoint(self):
+        client = ZenTaoClient("https://example.com/zentao", token="abc")
+
+        with patch.object(client, "post", return_value={"status": "success", "id": 99}) as post_mock:
+            payload = client.create_test_case({"productID": 8, "title": "登录成功后进入首页"})
+
+        post_mock.assert_called_once_with("/testcases", {"productID": 8, "title": "登录成功后进入首页"}, api_prefix="/api.php/v2")
+        self.assertEqual(payload, {"status": "success", "id": 99})
+
+    def test_create_test_case_falls_back_to_web_form_when_v2_returns_empty_body(self):
+        client = ZenTaoClient("https://example.com/zentao", token="abc")
+        test_case = {
+            "productID": 8,
+            "module": 0,
+            "type": "feature",
+            "pri": 3,
+            "title": "登录成功后进入首页",
+            "precondition": "账号已注册",
+            "steps": ["输入正确账号密码", "点击登录"],
+            "expects": ["登录按钮可点击", "进入首页"],
+            "stepType": ["step", "step"],
+        }
+
+        with (
+            patch.object(client, "post", return_value={}) as post_mock,
+            patch.object(client, "ensure_web_session") as session_mock,
+            patch.object(client, "post_form", return_value={"result": "success", "message": "保存成功", "id": 403}) as form_mock,
+        ):
+            payload = client.create_test_case(test_case)
+
+        post_mock.assert_called_once_with("/testcases", test_case, api_prefix="/api.php/v2")
+        session_mock.assert_called_once()
+        form_mock.assert_called_once_with(
+            "/testcase-create-8-all-0.json",
+            {
+                "product": "8",
+                "module": "0",
+                "story": "0",
+                "scene": "0",
+                "type": "feature",
+                "title": "登录成功后进入首页",
+                "pri": "3",
+                "precondition": "账号已注册",
+                "keywords": "",
+                "steps[1]": "输入正确账号密码",
+                "expects[1]": "登录按钮可点击",
+                "stepType[1]": "step",
+                "steps[2]": "点击登录",
+                "expects[2]": "进入首页",
+                "stepType[2]": "step",
+            },
+            allow_non_json_success=True,
+        )
+        self.assertEqual(payload, {"result": "success", "message": "保存成功", "id": 403})
+
+    def test_main_testcase_upload_subcommand_uploads_batch_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cases_file = Path(tmpdir) / "cases.json"
+            cases_file.write_text(
+                json.dumps(
+                    {
+                        "defaults": {"productID": 8, "type": "feature"},
+                        "cases": [
+                            {"title": "用例一", "steps": [{"step": "操作一", "expect": "结果一"}]},
+                            {"title": "用例二", "steps": ["操作二"], "expects": ["结果二"]},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(zentao_client_module, "_build_client") as build_client_mock:
+                client = ZenTaoClient("https://example.com/zentao", token="abc")
+                build_client_mock.return_value = client
+
+                with patch.object(
+                    client,
+                    "create_test_case",
+                    side_effect=[{"status": "success", "id": 101}, {"status": "success", "id": 102}],
+                ) as create_mock:
+                    stdout = io.StringIO()
+                    with patch("sys.stdout", new=stdout):
+                        exit_code = zentao_client_module.main(
+                            [
+                                "--base-url",
+                                "https://example.com/zentao",
+                                "--token",
+                                "abc",
+                                "testcase-upload",
+                                str(cases_file),
+                            ]
+                        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(create_mock.call_count, 2)
+        self.assertEqual(create_mock.call_args_list[0].args[0]["title"], "用例一")
+        output = json.loads(stdout.getvalue())
+        self.assertEqual(output["created"], 2)
+        self.assertEqual(output["failed"], 0)
+        self.assertEqual(output["results"][1]["response"]["id"], 102)
 
     def test_from_env_reads_resolve_bug_after_comment_flag(self):
         with patch.dict(
@@ -360,6 +529,27 @@ class ZenTaoClientTests(unittest.TestCase):
             client = _build_client(args)
 
         self.assertEqual(client.resolved_build, "build-20260529")
+
+    def test_build_client_reads_testcase_api_prefix_from_env(self):
+        args = type(
+            "Args",
+            (),
+            {
+                "base_url": "https://example.com/zentao",
+                "api_prefix": None,
+                "testcase_api_prefix": None,
+                "token": "abc",
+                "account": None,
+                "password": None,
+                "resolve_bug_after_comment": None,
+                "resolved_build": None,
+            },
+        )()
+
+        with patch.dict(os.environ, {"ZENTAO_TESTCASE_API_PREFIX": "/api.php/v2"}, clear=True):
+            client = _build_client(args)
+
+        self.assertEqual(client.testcase_api_prefix, "/api.php/v2")
 
     def test_ensure_web_session_logs_in_with_json_api_session_cookie(self):
         client = ZenTaoClient("https://example.com/zentao", account="alice", password="secret")

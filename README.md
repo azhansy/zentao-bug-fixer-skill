@@ -30,6 +30,7 @@ export ZENTAO_BASE_URL="https://your-zentao.example.com/zentao"
 export ZENTAO_ACCOUNT="your-account"
 export ZENTAO_PASSWORD="your-password"
 export ZENTAO_API_PREFIX="/api.php/v1"
+export ZENTAO_TESTCASE_API_PREFIX="/api.php/v2"
 export ZENTAO_TOKEN="existing-token"
 export ZENTAO_RESOLVED_BUILD="主干"
 export ZENTAO_RESOLVE_BUG_AFTER_COMMENT="1"
@@ -104,6 +105,48 @@ python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py bug-update 602
 
 Supported type values are `codeerror`, `config`, `install`, `security`, `performance`, `standard`, `automation`, `designdefect`, and `others`. Common Chinese labels such as `代码问题` are normalized to the matching ZenTao value.
 
+Batch upload AI-generated test cases from JSON:
+
+```bash
+python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py testcase-upload ./zentao-testcases.json
+```
+
+Example JSON:
+
+```json
+{
+  "defaults": {
+    "productID": 8,
+    "module": 0,
+    "type": "feature",
+    "pri": 3
+  },
+  "cases": [
+    {
+      "title": "登录成功后进入首页",
+      "precondition": "账号已注册",
+      "steps": [
+        {"step": "输入正确账号密码", "expect": "登录按钮可点击"},
+        {"step": "点击登录", "expect": "进入首页"}
+      ]
+    },
+    {
+      "title": "搜索联系人",
+      "steps": ["打开通讯录", "输入关键词"],
+      "expects": ["显示通讯录", "过滤出匹配联系人"]
+    }
+  ]
+}
+```
+
+Every final case must include `productID` and `title`. The helper accepts `product`, `productId`, and `product_id` as aliases for `productID`, and converts step objects into ZenTao `steps`, `expects`, and `stepType` arrays. The testcase create API defaults to `ZENTAO_TESTCASE_API_PREFIX=/api.php/v2`; if that v2 route returns an empty response on a self-hosted instance, the helper falls back to the logged-in web JSON form route.
+
+Continue after individual upload failures:
+
+```bash
+python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py testcase-upload ./zentao-testcases.json --continue-on-error
+```
+
 Run the interactive selector:
 
 ```bash
@@ -116,6 +159,21 @@ Add a cause and solution note to a repaired bug:
 python3 ~/.codex/skills/zentao-bug-fixer/scripts/zentao_client.py comment 6025 \
   --cause "消息附件数组只读取了第一项。" \
   --solution "遍历全部附件并逐条生成消息内容。"
+```
+
+The generated ZenTao comment uses this exact format:
+
+```text
+问题原因：
+消息附件数组只读取了第一项。
+
+解决方案：
+遍历全部附件并逐条生成消息内容。
+
+---------
+通过 <zentao-bug-fixer> Skill 自动完成问题分析与修复。
+
+说明：实际提交到禅道 comment 接口时，脚本会把尖括号转成 `&lt;` / `&gt;`，避免被禅道按 HTML 标签吞掉；页面最终显示仍然是 `通过 <zentao-bug-fixer> Skill 自动完成问题分析与修复。`
 ```
 
 Resolve a bug without adding a note:

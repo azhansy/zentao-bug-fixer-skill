@@ -21,6 +21,7 @@ from urllib.request import Request, urlopen
 
 
 DEFAULT_API_PREFIX = "/api.php/v1"
+DEFAULT_TESTCASE_API_PREFIX = "/api.php/v2"
 DEFAULT_RESOLVE_BUG_AFTER_COMMENT = False
 DEFAULT_RESOLVED_BUILD = "主干"
 BUG_TYPE_VALUES = {
@@ -76,6 +77,7 @@ class ZenTaoClient:
     base_url: str
     token: Optional[str] = None
     api_prefix: str = DEFAULT_API_PREFIX
+    testcase_api_prefix: str = DEFAULT_TESTCASE_API_PREFIX
     timeout: int = 30
     account: Optional[str] = None
     password: Optional[str] = None
@@ -94,6 +96,7 @@ class ZenTaoClient:
             base_url=base_url,
             token=os.getenv("ZENTAO_TOKEN"),
             api_prefix=os.getenv("ZENTAO_API_PREFIX", DEFAULT_API_PREFIX),
+            testcase_api_prefix=os.getenv("ZENTAO_TESTCASE_API_PREFIX", DEFAULT_TESTCASE_API_PREFIX),
             resolve_bug_after_comment=_env_bool(
                 "ZENTAO_RESOLVE_BUG_AFTER_COMMENT",
                 DEFAULT_RESOLVE_BUG_AFTER_COMMENT,
@@ -103,8 +106,13 @@ class ZenTaoClient:
             resolved_build=_clean_optional_string(os.getenv("ZENTAO_RESOLVED_BUILD")) or DEFAULT_RESOLVED_BUILD,
         )
 
-    def url(self, path: str, query: Optional[Dict[str, Any]] = None) -> str:
-        full = _strip_join(_strip_join(self.base_url, self.api_prefix), path)
+    def url(
+        self,
+        path: str,
+        query: Optional[Dict[str, Any]] = None,
+        api_prefix: Optional[str] = None,
+    ) -> str:
+        full = _strip_join(_strip_join(self.base_url, api_prefix or self.api_prefix), path)
         clean_query = {
             key: value
             for key, value in (query or {}).items()
@@ -123,6 +131,7 @@ class ZenTaoClient:
         path: str,
         payload: Optional[Dict[str, Any]] = None,
         query: Optional[Dict[str, Any]] = None,
+        api_prefix: Optional[str] = None,
     ) -> Any:
         body = None
         headers = {"Accept": "application/json"}
@@ -132,7 +141,7 @@ class ZenTaoClient:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
 
-        request = Request(self.url(path, query), data=body, headers=headers, method=method)
+        request = Request(self.url(path, query, api_prefix=api_prefix), data=body, headers=headers, method=method)
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 return _json_loads(response.read())
@@ -182,8 +191,8 @@ class ZenTaoClient:
     def get(self, path: str, query: Optional[Dict[str, Any]] = None) -> Any:
         return self.request("GET", path, query=query)
 
-    def post(self, path: str, payload: Dict[str, Any]) -> Any:
-        return self.request("POST", path, payload=payload)
+    def post(self, path: str, payload: Dict[str, Any], api_prefix: Optional[str] = None) -> Any:
+        return self.request("POST", path, payload=payload, api_prefix=api_prefix)
 
     def put(self, path: str, payload: Dict[str, Any]) -> Any:
         return self.request("PUT", path, payload=payload)
@@ -288,6 +297,29 @@ class ZenTaoClient:
             return data
         raise ZenTaoError(f"ZenTao comment failed: {data}")
 
+    def create_test_case(self, test_case: Dict[str, Any]) -> Any:
+        payload = build_test_case_payload(test_case)
+        data = self.post("/testcases", payload, api_prefix=self.testcase_api_prefix)
+        if isinstance(data, dict) and data.get("status") == "success":
+            return data
+        if data == {}:
+            return self.create_test_case_web_form(payload)
+        raise ZenTaoError(f"ZenTao testcase create failed: {data}")
+
+    def create_test_case_web_form(self, test_case: Dict[str, Any]) -> Any:
+        payload = build_test_case_web_form_payload(test_case)
+        product_id = str(test_case["productID"])
+        module_id = str(test_case.get("module", 0) or 0)
+        self.ensure_web_session()
+        data = self.post_form(
+            f"/testcase-create-{product_id}-all-{module_id}.json",
+            payload,
+            allow_non_json_success=True,
+        )
+        if isinstance(data, dict) and (data.get("result") == "success" or data.get("status") == "success"):
+            return data
+        raise ZenTaoError(f"ZenTao testcase web-form create failed: {data}")
+
 
 def is_unresolved_bug(bug: Dict[str, Any]) -> bool:
     status = str(bug.get("status") or "").lower()
@@ -362,8 +394,189 @@ def _int_or_default(value: Any, default: int) -> int:
 def build_bug_comment_payload(cause: str, solution: str) -> Dict[str, Any]:
     clean_cause = cause.strip()
     clean_solution = solution.strip()
-    comment = f"问题原因：{clean_cause}\n\n解决方案：{clean_solution}"
+    comment = (
+        "问题原因：\n"
+        f"{clean_cause}\n\n"
+        "解决方案：\n"
+        f"{clean_solution}\n\n"
+        "---------\n"
+        "通过 &lt;zentao-bug-fixer&gt; Skill 自动完成问题分析与修复。"
+    )
     return {"comment": comment}
+
+
+def load_test_case_batch(path: Path) -> List[Dict[str, Any]]:
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(raw, list):
+        defaults: Dict[str, Any] = {}
+        cases = raw
+    elif isinstance(raw, dict):
+        defaults = _ensure_dict(raw.get("defaults") or {}, "defaults")
+        cases = raw.get("cases")
+    else:
+        raise ValueError("Test case file must contain a JSON array or an object with a cases array.")
+
+    if not isinstance(cases, list):
+        raise ValueError("Test case file must contain a cases array.")
+    if not cases:
+        raise ValueError("Test case file does not contain any test cases.")
+
+    return [build_test_case_payload(_ensure_dict(test_case, f"cases[{index}]"), defaults) for index, test_case in enumerate(cases)]
+
+
+def build_test_case_payload(test_case: Dict[str, Any], defaults: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    merged = dict(defaults or {})
+    merged.update(test_case)
+
+    payload: Dict[str, Any] = {}
+    for key in (
+        "productID",
+        "title",
+        "module",
+        "story",
+        "pri",
+        "type",
+        "precondition",
+        "project",
+        "execution",
+    ):
+        value = _case_value(merged, key)
+        if value not in (None, ""):
+            payload[key] = value
+
+    product_id = _first_present(merged, "productID", "productId", "product_id", "product")
+    if product_id not in (None, ""):
+        payload["productID"] = product_id
+
+    title = _case_value(merged, "title")
+    if title not in (None, ""):
+        payload["title"] = title
+
+    if "productID" not in payload:
+        raise ValueError("Test case is missing required field productID.")
+    if "title" not in payload:
+        raise ValueError("Test case is missing required field title.")
+
+    steps, expects, step_types = _normalize_test_case_steps(merged)
+    if steps:
+        payload["steps"] = steps
+        payload["expects"] = expects
+        payload["stepType"] = step_types
+
+    return payload
+
+
+def build_test_case_web_form_payload(test_case: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "product": str(test_case["productID"]),
+        "module": str(test_case.get("module", 0) or 0),
+        "story": str(test_case.get("story", 0) or 0),
+        "scene": str(test_case.get("scene", 0) or 0),
+        "type": str(test_case.get("type", "feature") or "feature"),
+        "title": str(test_case["title"]),
+        "pri": str(test_case.get("pri", 3) or 3),
+        "precondition": str(test_case.get("precondition", "") or ""),
+        "keywords": str(test_case.get("keywords", "") or ""),
+    }
+
+    steps = test_case.get("steps") or []
+    expects = test_case.get("expects") or ["" for _ in steps]
+    step_types = test_case.get("stepType") or ["step" for _ in steps]
+    for index, step in enumerate(steps, start=1):
+        payload[f"steps[{index}]"] = str(step)
+        payload[f"expects[{index}]"] = str(expects[index - 1] if index - 1 < len(expects) else "")
+        payload[f"stepType[{index}]"] = str(step_types[index - 1] if index - 1 < len(step_types) else "step")
+
+    return payload
+
+
+def _normalize_test_case_steps(test_case: Dict[str, Any]) -> tuple:
+    raw_steps = test_case.get("steps")
+    if raw_steps in (None, ""):
+        return ([], [], [])
+    if not isinstance(raw_steps, list):
+        raise ValueError("Test case steps must be an array.")
+
+    steps: List[str] = []
+    expects: List[str] = []
+    step_types: List[str] = []
+
+    if raw_steps and all(isinstance(item, dict) for item in raw_steps):
+        for index, item in enumerate(raw_steps):
+            step = _first_present(item, "step", "action", "desc", "description", "content", "name")
+            if step in (None, ""):
+                raise ValueError(f"Test case step {index + 1} is missing step text.")
+            steps.append(str(step))
+            expects.append(str(_first_present(item, "expect", "expected", "result") or ""))
+            step_types.append(str(_first_present(item, "type", "stepType") or "step"))
+        return (steps, expects, step_types)
+
+    steps = [str(item) for item in raw_steps]
+    raw_expects = test_case.get("expects", test_case.get("expected", []))
+    if raw_expects in (None, "") or raw_expects == []:
+        expects = ["" for _ in steps]
+    elif isinstance(raw_expects, list):
+        expects = [str(item) for item in raw_expects]
+    else:
+        raise ValueError("Test case expects must be an array when steps are an array.")
+    if len(expects) != len(steps):
+        raise ValueError("Test case expects length must match steps length.")
+
+    raw_step_types = test_case.get("stepType", test_case.get("stepTypes", []))
+    if raw_step_types in (None, "") or raw_step_types == []:
+        step_types = ["step" for _ in steps]
+    elif isinstance(raw_step_types, list):
+        step_types = [str(item) for item in raw_step_types]
+    else:
+        raise ValueError("Test case stepType must be an array.")
+    if len(step_types) != len(steps):
+        raise ValueError("Test case stepType length must match steps length.")
+
+    return (steps, expects, step_types)
+
+
+def upload_test_case_batch(
+    client: ZenTaoClient,
+    cases: List[Dict[str, Any]],
+    continue_on_error: bool = False,
+) -> Dict[str, Any]:
+    results: List[Dict[str, Any]] = []
+    failed = 0
+    for index, test_case in enumerate(cases):
+        title = str(test_case.get("title") or "")
+        try:
+            response = client.create_test_case(test_case)
+        except Exception as exc:
+            failed += 1
+            if not continue_on_error:
+                raise
+            results.append({"index": index, "title": title, "status": "fail", "error": str(exc)})
+            continue
+        results.append({"index": index, "title": title, "status": "success", "response": response})
+
+    return {
+        "status": "success" if failed == 0 else "partial",
+        "created": len(cases) - failed,
+        "failed": failed,
+        "results": results,
+    }
+
+
+def _ensure_dict(value: Any, label: str) -> Dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object.")
+    return value
+
+
+def _case_value(test_case: Dict[str, Any], key: str) -> Any:
+    return test_case.get(key)
+
+
+def _first_present(values: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in values:
+            return values[key]
+    return None
 
 
 def validate_bug_type(value: str) -> str:
@@ -472,6 +685,8 @@ def _build_client(args: argparse.Namespace) -> ZenTaoClient:
         base_url=args.base_url or os.getenv("ZENTAO_BASE_URL", ""),
         token=args.token or os.getenv("ZENTAO_TOKEN"),
         api_prefix=args.api_prefix or os.getenv("ZENTAO_API_PREFIX", DEFAULT_API_PREFIX),
+        testcase_api_prefix=getattr(args, "testcase_api_prefix", None)
+        or os.getenv("ZENTAO_TESTCASE_API_PREFIX", DEFAULT_TESTCASE_API_PREFIX),
         resolve_bug_after_comment=resolve_bug_after_comment,
         account=args.account or os.getenv("ZENTAO_ACCOUNT"),
         password=args.password or os.getenv("ZENTAO_PASSWORD"),
@@ -494,6 +709,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="ZenTao REST helper for Codex skills.")
     parser.add_argument("--base-url")
     parser.add_argument("--api-prefix")
+    parser.add_argument(
+        "--testcase-api-prefix",
+        help=f"ZenTao API prefix for testcase creation; defaults to {DEFAULT_TESTCASE_API_PREFIX}.",
+    )
     parser.add_argument("--token")
     parser.add_argument("--account")
     parser.add_argument("--password")
@@ -540,6 +759,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         help=f"ZenTao resolvedBuild value used when resolve-after-comment is enabled; defaults to {DEFAULT_RESOLVED_BUILD}.",
     )
 
+    testcase_upload_parser = subparsers.add_parser("testcase-upload")
+    testcase_upload_parser.add_argument("json_file", type=Path)
+    testcase_upload_parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue uploading remaining test cases after one case fails.",
+    )
+
     args = parser.parse_args(argv)
     try:
         client = _build_client(args)
@@ -569,6 +796,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         elif args.command == "comment":
             _print_json(client.comment_bug(args.bug_id, args.cause, args.solution))
+        elif args.command == "testcase-upload":
+            result = upload_test_case_batch(
+                client,
+                load_test_case_batch(args.json_file),
+                continue_on_error=args.continue_on_error,
+            )
+            _print_json(result)
+            if result["failed"]:
+                return 1
         return 0
     except (ZenTaoError, ValueError) as exc:
         print(f"zentao_client: {exc}", file=sys.stderr)
